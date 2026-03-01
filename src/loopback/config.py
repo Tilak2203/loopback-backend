@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = Field(default="")
     GEMINI_MODEL: str = Field(default="gemini-2.5-flash")
-    CORS_ORIGINS: str = Field(default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
+    CORS_ORIGINS: str = Field(default="https://chicago-loopback.vercel.app,http://localhost:8081,http://127.0.0.1:8081,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
 
     GEOHASH_PRECISION: int = Field(default=7)
     ISSUE_NEAR_ROUTE_METERS: int = Field(default=80)
