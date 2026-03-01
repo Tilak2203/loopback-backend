@@ -62,17 +62,68 @@ def _extract_json(text: str) -> dict:
     """
     text = text.strip()
 
+    # Remove optional markdown fences: ```json ... ```
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
     # Attempt direct parse
     try:
         return json.loads(text)
     except Exception:
         pass
 
-    # Extract first JSON object block
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if match:
-        candidate = match.group(0)
-        return json.loads(candidate)
+    def _find_balanced_object_candidates(raw: str) -> list[str]:
+        candidates: list[str] = []
+        start_idx: Optional[int] = None
+        depth = 0
+        in_str = False
+        escaped = False
+
+        for i, ch in enumerate(raw):
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+
+            if ch == "{":
+                if depth == 0:
+                    start_idx = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start_idx is not None:
+                        candidates.append(raw[start_idx : i + 1])
+                        start_idx = None
+
+        return candidates
+
+    # Try balanced JSON-object candidates in order of size (largest first).
+    candidates = _find_balanced_object_candidates(text)
+    for candidate in sorted(candidates, key=len, reverse=True):
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+        # One lenient cleanup pass for common model formatting mistakes.
+        cleaned = candidate
+        cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')
+        cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        try:
+            return json.loads(cleaned)
+        except Exception:
+            pass
 
     raise ValueError("LLM output was not valid JSON")
 
@@ -100,6 +151,7 @@ def _gemini_generate_text(system_prompt: str, user_text: str) -> str:
         "generationConfig": {
             "temperature": 0.2,
             "maxOutputTokens": 600,
+            "responseMimeType": "application/json",
         },
     }
 
@@ -114,10 +166,11 @@ def _gemini_generate_text(system_prompt: str, user_text: str) -> str:
 
     content = candidates[0].get("content") or {}
     parts = content.get("parts") or []
-    if not parts or "text" not in parts[0]:
+    text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")]
+    if not text_parts:
         raise ValueError("Gemini response missing text content")
 
-    return parts[0]["text"]
+    return "\n".join(text_parts)
 
 def triage_with_llm(
     *,
@@ -147,11 +200,14 @@ def triage_with_llm(
         "sample_reports": sample_reports[:5],
     }
 
-    # Call Gemini
-    text = _gemini_generate_text(_PROMPT, json.dumps(payload, ensure_ascii=False))
+    try:
+        # Call Gemini
+        text = _gemini_generate_text(_PROMPT, json.dumps(payload, ensure_ascii=False))
 
-    # Parse JSON
-    data = _extract_json(text)
+        # Parse JSON
+        data = _extract_json(text)
+    except Exception:
+        return None
 
     llm_sev = int(data.get("final_severity_1to5", base_severity_1to5))
     final_sev = _clamp_llm_severity(base_severity_1to5, llm_sev)
