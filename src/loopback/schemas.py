@@ -1,8 +1,57 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Any, Dict, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+
+
+DeptId = Literal["CTA_OPS", "CITY_311", "SECURITY", "COMMUNITY"]
+
+
+# -------------------- Smart endpoints --------------------
+class ReportCreateRequest(BaseModel):
+    user_id: Optional[str] = None
+    category: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=2000)
+    user_priority: int = Field(ge=1, le=5)
+    lat: float
+    lon: float
+    location_text: Optional[str] = Field(default=None, max_length=200)
+
+
+class ReportCreateResponse(BaseModel):
+    report_id: str
+    task_id: str
+    category: str
+    geohash: str
+
+    report_count: int
+    unique_user_count: int
+    avg_user_priority: float
+
+    base_severity_1to5: int
+    final_severity_1to5: int
+    assigned_dept_id: str
+    complaint_draft: str
+    severity_reason: str
+
+
+class DepartmentTasksResponse(BaseModel):
+    department: str
+    tasks: list[Any]
+
+
+class RouteRecommendRequest(BaseModel):
+    start_lat: float
+    start_lon: float
+    end_lat: float
+    end_lon: float
+    mode: str = Field(default="walk")
+
+
+class RouteRecommendResponse(BaseModel):
+    route_a: Dict[str, Any]
+    route_b: Dict[str, Any]
 
 
 # -------------------- Departments --------------------
