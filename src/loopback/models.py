@@ -7,7 +7,7 @@ from loopback.db import Base
 
 
 class Department(Base):
-    _tablename_ = "departments"
+    __tablename__ = "departments"
 
     dept_id = Column(Text, primary_key=True)           # text per your DB
     dept_name = Column(Text, nullable=False)
@@ -15,7 +15,7 @@ class Department(Base):
 
 
 class Task(Base):
-    _tablename_ = "tasks"
+    __tablename__ = "tasks"
 
     task_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -42,7 +42,7 @@ class Task(Base):
 
 
 class Report(Base):
-    _tablename_ = "reports"
+    __tablename__ = "reports"
 
     report_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -61,7 +61,7 @@ class Report(Base):
 
 
 class User(Base):
-    _tablename_ = "users"
+    __tablename__ = "users"
 
     user_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
@@ -75,7 +75,7 @@ class User(Base):
 
 
 class DeptWorker(Base):
-    _tablename_ = "dept_workers"
+    __tablename__ = "dept_workers"
 
     worker_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     dept_id = Column(Text, nullable=False)
@@ -87,7 +87,7 @@ class DeptWorker(Base):
 
 
 class AssignedTask(Base):
-    _tablename_ = "assigned_tasks"
+    __tablename__ = "assigned_tasks"
 
     assignment_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), nullable=False)
@@ -98,7 +98,7 @@ class AssignedTask(Base):
 
 
 class UserAction(Base):
-    _tablename_ = "user_actions"
+    __tablename__ = "user_actions"
 
     action_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=False)
