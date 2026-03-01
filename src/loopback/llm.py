@@ -17,14 +17,6 @@ class LLMTriageResult:
     complaint_draft: str
     meta: Dict[str, Any]
 
-
-@dataclass(frozen=True)
-class LLMRouteDecision:
-    avoid_route_id: str
-    recommended_route_id: str
-    reason: str
-    meta: Dict[str, Any]
-
 _PROMPT = """You are a civic operations triage assistant for a city.
 Return STRICT JSON only (no extra text).
 
@@ -48,30 +40,6 @@ Output JSON schema:
   "department": "CTA_OPS|CITY_311|SECURITY|COMMUNITY",
   "complaint_draft": "string",
   "meta": { ... }
-}
-"""
-
-
-_ROUTE_PROMPT = """You are a city routing safety assistant.
-Return STRICT JSON only (no extra text).
-
-Task:
-Given candidate routes between a start and destination, plus issue summaries computed ONLY from reports in the last 7 days and only for points located between start and destination, choose:
-1) one route users should avoid (highest risk)
-2) one route that is recommended (lowest risk)
-
-Rules:
-- Prefer highest severity and higher issue count for the avoid route.
-- Prefer lower severity, fewer issues, and reasonable travel time for the recommended route.
-- avoid_route_id and recommended_route_id must be different.
-- Only use the provided candidate data.
-
-Output JSON schema:
-{
-    "avoid_route_id": "string",
-    "recommended_route_id": "string",
-    "reason": "string",
-    "meta": { ... }
 }
 """
 
@@ -264,30 +232,49 @@ def triage_with_llm(
     )
 
 
+_ROUTE_PROMPT = """You are a route safety analysis assistant.
+Return STRICT JSON only (no extra text).
+
+Task:
+Given candidate routes between a start and end location, and incident summaries restricted to the last N days
+and near each route corridor, choose:
+1) one route to avoid (highest risk), and
+2) one preferred route (lowest risk).
+
+Rules:
+- Only use the provided route + incident summary data.
+- Prefer fewer crime-related incidents and lower severities.
+- If tied, prefer shorter duration.
+- recommended_route_index must be different from avoid_route_index when multiple routes exist.
+
+Output JSON schema:
+{
+  "avoid_route_index": 0,
+  "recommended_route_index": 1,
+  "avoid_reason": "string",
+  "recommended_reason": "string",
+  "notes": "string"
+}
+"""
+
+
 def choose_routes_with_llm(
     *,
-    start_lat: float,
-    start_lon: float,
-    end_lat: float,
-    end_lon: float,
+    start: dict[str, float],
+    end: dict[str, float],
     mode: str,
-    days_window: int,
-    candidates: list[dict[str, Any]],
-    considered_issue_count: int,
-) -> Optional[LLMRouteDecision]:
+    window_days: int,
+    route_summaries: list[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
     if not getattr(settings, "GEMINI_API_KEY", ""):
         return None
 
-    if len(candidates) < 2:
-        return None
-
     payload = {
-        "start": {"lat": start_lat, "lon": start_lon},
-        "destination": {"lat": end_lat, "lon": end_lon},
+        "start": start,
+        "end": end,
         "mode": mode,
-        "days_window": days_window,
-        "considered_issue_count": considered_issue_count,
-        "candidates": candidates,
+        "window_days": window_days,
+        "routes": route_summaries,
     }
 
     try:
@@ -296,21 +283,29 @@ def choose_routes_with_llm(
     except Exception:
         return None
 
-    route_ids = {str(c.get("route_id", "")) for c in candidates}
-    avoid_id = str(data.get("avoid_route_id", "")).strip()
-    rec_id = str(data.get("recommended_route_id", "")).strip()
-
-    if avoid_id not in route_ids or rec_id not in route_ids or avoid_id == rec_id:
+    if not route_summaries:
         return None
 
-    reason = str(data.get("reason", "")).strip()[:1000] or "Selected from route severity and issue density."
-    meta = data.get("meta", {})
-    if not isinstance(meta, dict):
-        meta = {"raw_meta": meta}
+    max_index = len(route_summaries) - 1
+    try:
+        avoid_idx = int(data.get("avoid_route_index", 0))
+    except Exception:
+        avoid_idx = 0
+    try:
+        rec_idx = int(data.get("recommended_route_index", 0))
+    except Exception:
+        rec_idx = 0
 
-    return LLMRouteDecision(
-        avoid_route_id=avoid_id,
-        recommended_route_id=rec_id,
-        reason=reason,
-        meta=meta,
-    )
+    avoid_idx = max(0, min(max_index, avoid_idx))
+    rec_idx = max(0, min(max_index, rec_idx))
+
+    if len(route_summaries) > 1 and rec_idx == avoid_idx:
+        rec_idx = 1 if avoid_idx == 0 else 0
+
+    return {
+        "avoid_route_index": avoid_idx,
+        "recommended_route_index": rec_idx,
+        "avoid_reason": str(data.get("avoid_reason", "Higher incident risk on this corridor.")).strip()[:500],
+        "recommended_reason": str(data.get("recommended_reason", "Lower incident risk with safer profile.")).strip()[:500],
+        "notes": str(data.get("notes", "")).strip()[:500],
+    }

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional, List, Any, Dict, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field
 
 
 DeptId = Literal["CTA_OPS", "CITY_311", "SECURITY", "COMMUNITY"]
@@ -41,53 +41,35 @@ class DepartmentTasksResponse(BaseModel):
     tasks: list[Any]
 
 
-class LatLon(BaseModel):
-    lat: float
-    lon: float
-
-
 class RouteRecommendRequest(BaseModel):
-    start_lat: Optional[float] = None
-    start_lon: Optional[float] = None
-    end_lat: Optional[float] = None
-    end_lon: Optional[float] = None
-    start: Optional[LatLon] = None
-    destination: Optional[LatLon] = None
+    start_lat: float
+    start_lon: float
+    end_lat: float
+    end_lon: float
     mode: str = Field(default="walk")
-
-    @model_validator(mode="after")
-    def resolve_coordinates(self):
-        if self.start is not None:
-            if self.start_lat is None:
-                self.start_lat = self.start.lat
-            if self.start_lon is None:
-                self.start_lon = self.start.lon
-
-        if self.destination is not None:
-            if self.end_lat is None:
-                self.end_lat = self.destination.lat
-            if self.end_lon is None:
-                self.end_lon = self.destination.lon
-
-        missing = [
-            name
-            for name, value in {
-                "start_lat": self.start_lat,
-                "start_lon": self.start_lon,
-                "end_lat": self.end_lat,
-                "end_lon": self.end_lon,
-            }.items()
-            if value is None
-        ]
-        if missing:
-            raise ValueError(f"Missing route coordinates: {', '.join(missing)}")
-
-        return self
 
 
 class RouteRecommendResponse(BaseModel):
     route_a: Dict[str, Any]
     route_b: Dict[str, Any]
+
+
+class LatLonPoint(BaseModel):
+    lat: float
+    lon: float
+
+
+class LLMRouteRecommendRequest(BaseModel):
+    start: LatLonPoint
+    end: LatLonPoint
+    mode: str = Field(default="walk")
+
+
+class LLMRouteRecommendResponse(BaseModel):
+    avoid_route: Dict[str, Any]
+    recommended_route: Dict[str, Any]
+    window_days: int
+    generated_by: str
 
 
 # -------------------- Departments --------------------

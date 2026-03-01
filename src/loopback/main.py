@@ -17,6 +17,7 @@ from loopback.schemas import (
     ReportCreateRequest, ReportCreateResponse,
     DepartmentTasksResponse, TaskOut,
     RouteRecommendRequest, RouteRecommendResponse,
+    LLMRouteRecommendRequest, LLMRouteRecommendResponse,
 
     # CRUD schemas
     DepartmentCreate, DepartmentOut,
@@ -27,7 +28,7 @@ from loopback.schemas import (
     AssignedTaskCreate, AssignedTaskOut,
     UserActionCreate, UserActionOut,
 )
-from loopback.services import create_report_and_update_task, recommend_routes
+from loopback.services import create_report_and_update_task, recommend_routes, recommend_routes_with_llm
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,26 @@ def create_app() -> FastAPI:
                 mode=payload.mode,
             )
             return RouteRecommendResponse(route_a=rec["route_a"], route_b=rec["route_b"])
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/routes/llm-recommend", response_model=LLMRouteRecommendResponse)
+    def routes_llm_recommend(payload: LLMRouteRecommendRequest, db: Session = Depends(get_db)):
+        try:
+            rec = recommend_routes_with_llm(
+                db,
+                start_lat=payload.start.lat,
+                start_lon=payload.start.lon,
+                end_lat=payload.end.lat,
+                end_lon=payload.end.lon,
+                mode=payload.mode,
+            )
+            return LLMRouteRecommendResponse(
+                avoid_route=rec["avoid_route"],
+                recommended_route=rec["recommended_route"],
+                window_days=rec["window_days"],
+                generated_by=rec["generated_by"],
+            )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
