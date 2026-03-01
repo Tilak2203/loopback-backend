@@ -9,6 +9,29 @@ from loopback.maps import get_mapbox_routes
 from loopback.llm import triage_with_llm
 from loopback.models import Task, Report
 
+
+def _find_nearby_task(
+    db: Session,
+    *,
+    category: str,
+    lat: float,
+    lon: float,
+    radius_m: int,
+) -> Task | None:
+    candidates = db.query(Task).filter(Task.category == category).limit(1000).all()
+
+    best_task: Task | None = None
+    best_distance = float("inf")
+    for candidate in candidates:
+        if candidate.lat is None or candidate.lon is None:
+            continue
+        distance = haversine_m(lat, lon, float(candidate.lat), float(candidate.lon))
+        if distance <= radius_m and distance < best_distance:
+            best_distance = distance
+            best_task = candidate
+
+    return best_task
+
 # ---------- Department routing rules ----------
 def choose_department(category: str, severity_1to5: int) -> str:
     cat = (category or "").strip().lower()
@@ -52,14 +75,35 @@ def create_report_and_update_task(
     location_text: str | None,
 ) -> dict[str, Any]:
     category = category.strip()
-    gh = to_geohash(lat, lon, settings.GEOHASH_PRECISION)
+    task = _find_nearby_task(
+        db,
+        category=category,
+        lat=lat,
+        lon=lon,
+        radius_m=settings.TASK_DEDUPE_RADIUS_METERS,
+    )
 
-    # 1) find-or-create task by (category + geohash)
-    task = db.query(Task).filter(Task.category == category, Task.geohash == gh).one_or_none()
-    if task is None:
-        task = Task(category=category, geohash=gh, lat=lat, lon=lon)
-        db.add(task)
-        db.flush()
+    if task is not None:
+        canonical_lat = float(task.lat)
+        canonical_lon = float(task.lon)
+        gh = task.geohash or to_geohash(canonical_lat, canonical_lon, settings.GEOHASH_PRECISION)
+        task.geohash = gh
+    else:
+        canonical_lat = lat
+        canonical_lon = lon
+        gh = to_geohash(canonical_lat, canonical_lon, settings.GEOHASH_PRECISION)
+
+        # 1b) fallback dedupe by (category + geohash)
+        task = db.query(Task).filter(Task.category == category, Task.geohash == gh).one_or_none()
+        if task is None:
+            task = Task(category=category, geohash=gh, lat=canonical_lat, lon=canonical_lon)
+            db.add(task)
+            db.flush()
+
+    # 1) ensure canonical geolocation is carried by task
+    if task.lat is None or task.lon is None:
+        task.lat = canonical_lat
+        task.lon = canonical_lon
 
     # 2) create report linked to task
     report = Report(
@@ -68,8 +112,8 @@ def create_report_and_update_task(
         description=description,
         category=category,
         user_priority=user_priority,
-        lat=lat,
-        lon=lon,
+        lat=canonical_lat,
+        lon=canonical_lon,
         geohash=gh,
     )
     db.add(report)
