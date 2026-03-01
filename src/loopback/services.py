@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -6,7 +6,7 @@ from sqlalchemy import func
 from loopback.config import settings
 from loopback.geo import to_geohash, haversine_m
 from loopback.maps import get_mapbox_routes
-from loopback.llm import triage_with_llm
+from loopback.llm import triage_with_llm, choose_routes_with_llm
 from loopback.models import Task, Report
 
 
@@ -181,6 +181,77 @@ def _route_flag(polyline: list[tuple[float, float]], issues: list[dict]) -> dict
     return {"level": "GREEN", "max_severity": max_sev, "issue_count": count,
             "message": "No significant issues reported near this route."}
 
+
+def _is_between_start_end(
+    *,
+    point_lat: float,
+    point_lon: float,
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+    corridor_buffer_m: float = 500.0,
+) -> bool:
+    direct = haversine_m(start_lat, start_lon, end_lat, end_lon)
+    via_point = (
+        haversine_m(start_lat, start_lon, point_lat, point_lon)
+        + haversine_m(point_lat, point_lon, end_lat, end_lon)
+    )
+    return via_point <= (direct + corridor_buffer_m)
+
+
+def _recent_corridor_issues(
+    db: Session,
+    *,
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+    days_window: int,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.utcnow() - timedelta(days=days_window)
+    rows = (
+        db.query(
+            Report.lat,
+            Report.lon,
+            Report.category,
+            Report.created_at,
+            Task.final_severity_1to5,
+        )
+        .join(Task, Task.task_id == Report.task_id)
+        .filter(
+            Report.created_at >= cutoff,
+            Report.lat.isnot(None),
+            Report.lon.isnot(None),
+        )
+        .all()
+    )
+
+    issues: list[dict[str, Any]] = []
+    for lat, lon, category, created_at, final_sev in rows:
+        lat_f = float(lat)
+        lon_f = float(lon)
+        if not _is_between_start_end(
+            point_lat=lat_f,
+            point_lon=lon_f,
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+        ):
+            continue
+        issues.append(
+            {
+                "lat": lat_f,
+                "lon": lon_f,
+                "final_severity_1to5": int(final_sev or 1),
+                "category": category,
+                "created_at": created_at.isoformat() if created_at is not None else None,
+            }
+        )
+
+    return issues
+
 def recommend_routes(
     db: Session,
     *,
@@ -190,6 +261,8 @@ def recommend_routes(
     end_lon: float,
     mode: str,
 ) -> dict[str, Any]:
+    days_window = 7
+
     routes = get_mapbox_routes(
         start_lat=start_lat, start_lon=start_lon,
         end_lat=end_lat, end_lon=end_lon,
@@ -199,30 +272,83 @@ def recommend_routes(
     if not routes:
         raise ValueError("No routes returned by Mapbox")
 
-    # For MVP: pull up to 500 tasks (enough for hackathon demo). This powers the flags.
-    tasks = db.query(Task).filter(Task.final_severity_1to5 >= 1).order_by(Task.final_severity_1to5.desc()).limit(500).all()
-    issues = [{"lat": t.lat, "lon": t.lon, "final_severity_1to5": t.final_severity_1to5, "category": t.category} for t in tasks]
+    issues = _recent_corridor_issues(
+        db,
+        start_lat=start_lat,
+        start_lon=start_lon,
+        end_lat=end_lat,
+        end_lon=end_lon,
+        days_window=days_window,
+    )
 
     scored = []
-    for r in routes:
+    for idx, r in enumerate(routes):
         flag = _route_flag(r.polyline, issues)
         hazard_rank = {"GREEN": 0, "YELLOW": 1, "RED": 2}[flag["level"]]
-        scored.append((r, flag, hazard_rank))
+        route_id = f"route_{idx}"
+        scored.append((route_id, r, flag, hazard_rank))
 
-    # Route A = default route
-    route_a, flag_a, _ = scored[0]
+    llm_candidates: list[dict[str, Any]] = []
+    for route_id, route, flag, hazard_rank in scored:
+        llm_candidates.append(
+            {
+                "route_id": route_id,
+                "name": route.name,
+                "distance_m": route.distance_m,
+                "duration_s": route.duration_s,
+                "hazard_level": flag["level"],
+                "hazard_rank": hazard_rank,
+                "max_severity": flag["max_severity"],
+                "nearby_issue_count": flag["issue_count"],
+            }
+        )
 
-    # Route B = recommended (lowest hazard, then duration)
-    best = sorted(scored, key=lambda x: (x[2], x[1]["max_severity"], x[0].duration_s, x[0].distance_m))[0]
-    route_b, flag_b, _ = best
+    decision = choose_routes_with_llm(
+        start_lat=start_lat,
+        start_lon=start_lon,
+        end_lat=end_lat,
+        end_lon=end_lon,
+        mode=mode,
+        days_window=days_window,
+        candidates=llm_candidates,
+        considered_issue_count=len(issues),
+    )
 
-    def pack(route, flag):
+    by_id = {route_id: (route, flag, hazard_rank) for route_id, route, flag, hazard_rank in scored}
+
+    if decision is not None:
+        avoid_route, avoid_flag, _ = by_id[decision.avoid_route_id]
+        recommended_route, recommended_flag, _ = by_id[decision.recommended_route_id]
+        selection_reason = decision.reason
+        selection_meta = decision.meta
+    else:
+        worst = sorted(scored, key=lambda x: (-x[3], -x[2]["max_severity"], -x[2]["issue_count"], -x[1].duration_s, -x[1].distance_m))[0]
+        best = sorted(scored, key=lambda x: (x[3], x[2]["max_severity"], x[2]["issue_count"], x[1].duration_s, x[1].distance_m))[0]
+
+        if worst[0] == best[0] and len(scored) > 1:
+            alternatives = [x for x in sorted(scored, key=lambda x: (x[3], x[2]["max_severity"], x[2]["issue_count"], x[1].duration_s, x[1].distance_m)) if x[0] != worst[0]]
+            best = alternatives[0]
+
+        avoid_route, avoid_flag, _ = worst[1], worst[2], worst[3]
+        recommended_route, recommended_flag, _ = best[1], best[2], best[3]
+        selection_reason = "Fallback selection from hazard severity, issue density, and duration."
+        selection_meta = {"source": "heuristic"}
+
+    def pack(route, flag, label: str):
         return {
+            "label": label,
             "name": route.name,
             "distance_m": route.distance_m,
             "duration_s": route.duration_s,
             "flag": flag,
             "polyline": route.polyline,
+            "analysis_window_days": days_window,
+            "considered_corridor_issue_count": len(issues),
         }
 
-    return {"route_a": pack(route_a, flag_a), "route_b": pack(route_b, flag_b)}
+    return {
+        "route_a": pack(avoid_route, avoid_flag, "avoid"),
+        "route_b": pack(recommended_route, recommended_flag, "recommended"),
+        "selection_reason": selection_reason,
+        "selection_meta": selection_meta,
+    }

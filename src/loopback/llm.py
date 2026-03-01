@@ -17,6 +17,14 @@ class LLMTriageResult:
     complaint_draft: str
     meta: Dict[str, Any]
 
+
+@dataclass(frozen=True)
+class LLMRouteDecision:
+    avoid_route_id: str
+    recommended_route_id: str
+    reason: str
+    meta: Dict[str, Any]
+
 _PROMPT = """You are a civic operations triage assistant for a city.
 Return STRICT JSON only (no extra text).
 
@@ -40,6 +48,30 @@ Output JSON schema:
   "department": "CTA_OPS|CITY_311|SECURITY|COMMUNITY",
   "complaint_draft": "string",
   "meta": { ... }
+}
+"""
+
+
+_ROUTE_PROMPT = """You are a city routing safety assistant.
+Return STRICT JSON only (no extra text).
+
+Task:
+Given candidate routes between a start and destination, plus issue summaries computed ONLY from reports in the last 7 days and only for points located between start and destination, choose:
+1) one route users should avoid (highest risk)
+2) one route that is recommended (lowest risk)
+
+Rules:
+- Prefer highest severity and higher issue count for the avoid route.
+- Prefer lower severity, fewer issues, and reasonable travel time for the recommended route.
+- avoid_route_id and recommended_route_id must be different.
+- Only use the provided candidate data.
+
+Output JSON schema:
+{
+    "avoid_route_id": "string",
+    "recommended_route_id": "string",
+    "reason": "string",
+    "meta": { ... }
 }
 """
 
@@ -228,5 +260,57 @@ def triage_with_llm(
         reason=reason,
         department=dept,  # type: ignore
         complaint_draft=draft,
+        meta=meta,
+    )
+
+
+def choose_routes_with_llm(
+    *,
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+    mode: str,
+    days_window: int,
+    candidates: list[dict[str, Any]],
+    considered_issue_count: int,
+) -> Optional[LLMRouteDecision]:
+    if not getattr(settings, "GEMINI_API_KEY", ""):
+        return None
+
+    if len(candidates) < 2:
+        return None
+
+    payload = {
+        "start": {"lat": start_lat, "lon": start_lon},
+        "destination": {"lat": end_lat, "lon": end_lon},
+        "mode": mode,
+        "days_window": days_window,
+        "considered_issue_count": considered_issue_count,
+        "candidates": candidates,
+    }
+
+    try:
+        text = _gemini_generate_text(_ROUTE_PROMPT, json.dumps(payload, ensure_ascii=False))
+        data = _extract_json(text)
+    except Exception:
+        return None
+
+    route_ids = {str(c.get("route_id", "")) for c in candidates}
+    avoid_id = str(data.get("avoid_route_id", "")).strip()
+    rec_id = str(data.get("recommended_route_id", "")).strip()
+
+    if avoid_id not in route_ids or rec_id not in route_ids or avoid_id == rec_id:
+        return None
+
+    reason = str(data.get("reason", "")).strip()[:1000] or "Selected from route severity and issue density."
+    meta = data.get("meta", {})
+    if not isinstance(meta, dict):
+        meta = {"raw_meta": meta}
+
+    return LLMRouteDecision(
+        avoid_route_id=avoid_id,
+        recommended_route_id=rec_id,
+        reason=reason,
         meta=meta,
     )
