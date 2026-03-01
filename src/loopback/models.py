@@ -35,7 +35,7 @@ class Task(Base):
 
     assigned_dept_id = Column(Text, nullable=True)
     complaint_draft = Column(Text, nullable=True)
-    status = Column(Text, nullable=False, default="open")
+    status = Column(Text, nullable=False, default="NEW")
 
     created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=False), server_default=func.now(), onupdate=func.now(), nullable=False)

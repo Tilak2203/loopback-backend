@@ -87,7 +87,7 @@ class TaskCreate(BaseModel):
 
     assigned_dept_id: Optional[str] = None
     complaint_draft: Optional[str] = None
-    status: str = "open"
+    status: str = "NEW"
 
 
 class TaskOut(BaseModel):
