@@ -1,76 +1,112 @@
 import uuid
-from datetime import datetime
-from sqlalchemy import (
-    String, Integer, Float, DateTime, ForeignKey, UniqueConstraint, Text
-)
+from sqlalchemy import Column, Text, Integer, Float, DateTime
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func
+
 from loopback.db import Base
 
-class User(Base):
-    __tablename__ = "users"
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str | None] = mapped_column(String, nullable=True)
-    xp_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 class Department(Base):
     __tablename__ = "departments"
-    dept_id: Mapped[str] = mapped_column(String, primary_key=True)     # CTA_OPS, CITY_311, SECURITY
-    dept_name: Mapped[str] = mapped_column(String, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    dept_id = Column(Text, primary_key=True)           # text per your DB
+    dept_name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+
 
 class Task(Base):
-    """
-    Deduped unique issue bucket: (category + geohash)
-    Stores aggregates + LLM outputs.
-    """
     __tablename__ = "tasks"
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    category: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    geohash: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    lat: Mapped[float] = mapped_column(Float, nullable=False)
-    lon: Mapped[float] = mapped_column(Float, nullable=False)
+    task_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    report_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    unique_user_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    avg_user_priority: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    category = Column(Text, nullable=False)
+    geohash = Column(Text, nullable=True)
 
-    base_severity_1to5: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    final_severity_1to5: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    severity_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lat = Column(Float, nullable=True)
+    lon = Column(Float, nullable=True)
 
-    assigned_dept_id: Mapped[str | None] = mapped_column(String, ForeignKey("departments.dept_id"), nullable=True)
-    complaint_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_count = Column(Integer, nullable=False, default=0)
+    unique_user_count = Column(Integer, nullable=False, default=0)
+    avg_user_priority = Column(Float, nullable=False, default=0.0)
 
-    status: Mapped[str] = mapped_column(String, default="NEW", nullable=False)  # NEW/ACK/IN_PROGRESS/RESOLVED
+    base_severity_1to5 = Column(Integer, nullable=True)
+    final_severity_1to5 = Column(Integer, nullable=True)
+    severity_reason = Column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    assigned_dept_id = Column(Text, nullable=True)
+    complaint_draft = Column(Text, nullable=True)
+    status = Column(Text, nullable=False, default="open")
 
-    __table_args__ = (
-        UniqueConstraint("category", "geohash", name="uq_task_category_geohash"),
-    )
+    created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=False), server_default=func.now(), onupdate=func.now(), nullable=False)
+
 
 class Report(Base):
-    """
-    Raw user submission linked to the deduped task_id.
-    """
     __tablename__ = "reports"
-    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.task_id"), nullable=False, index=True)
+    report_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    category: Mapped[str] = mapped_column(String, nullable=False)
-    user_priority: Mapped[int] = mapped_column(Integer, nullable=False)  # 1..5 (validated in API)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    task_id = Column(UUID(as_uuid=True), nullable=True)
 
-    lat: Mapped[float] = mapped_column(Float, nullable=False)
-    lon: Mapped[float] = mapped_column(Float, nullable=False)
-    geohash: Mapped[str] = mapped_column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    category = Column(Text, nullable=False)
+    user_priority = Column(Integer, nullable=False, default=3)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    lat = Column(Float, nullable=True)
+    lon = Column(Float, nullable=True)
+    geohash = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False)
+    email = Column(Text, nullable=False, unique=True)
+
+    xp_points = Column(Integer, nullable=False, default=0)
+    streak = Column(Integer, nullable=False, default=0)
+    level = Column(Integer, nullable=False, default=1)
+
+    created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
+
+
+class DeptWorker(Base):
+    __tablename__ = "dept_workers"
+
+    worker_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dept_id = Column(Text, nullable=False)
+
+    name = Column(Text, nullable=False)
+    role = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
+
+
+class AssignedTask(Base):
+    __tablename__ = "assigned_tasks"
+
+    assignment_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), nullable=False)
+    worker_id = Column(UUID(as_uuid=True), nullable=False)
+
+    assigned_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
+    notes = Column(Text, nullable=True)
+
+
+class UserAction(Base):
+    __tablename__ = "user_actions"
+
+    action_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+
+    action_type = Column(Text, nullable=False)
+    xp_earned = Column(Integer, nullable=False, default=0)
+
+    report_id = Column(UUID(as_uuid=True), nullable=True)
+    task_id = Column(UUID(as_uuid=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
