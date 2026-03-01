@@ -27,7 +27,7 @@ from loopback.schemas import (
 )
 from loopback.services import create_report_and_update_task, recommend_routes
 
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 
 def seed_departments(db: Session) -> None:
