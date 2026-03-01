@@ -247,6 +247,40 @@ def _is_crime_related(category: str | None, description: str | None) -> bool:
     return any(keyword in text for keyword in CRIME_KEYWORDS)
 
 
+def _top_categories(incidents: list[dict[str, Any]], limit: int = 2) -> list[str]:
+    counts: dict[str, int] = {}
+    for item in incidents:
+        category = str(item.get("category") or "unknown").strip().lower()
+        counts[category] = counts.get(category, 0) + 1
+    ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+    return [name for name, _ in ranked[:limit]]
+
+
+def _reason_from_summary(summary: dict[str, Any], *, avoid: bool) -> str:
+    incidents = int(summary.get("incident_count", 0) or 0)
+    crime = int(summary.get("crime_related_count", 0) or 0)
+    max_severity = int(summary.get("max_severity", 0) or 0)
+    categories = summary.get("top_categories") or []
+    categories_text = ", ".join(categories) if categories else "mixed categories"
+
+    if avoid:
+        if incidents == 0:
+            return "Avoided because this route is less predictable in current scoring despite no nearby incidents in the last 7 days."
+        return (
+            f"Avoid this route due to {incidents} nearby incidents in the last 7 days "
+            f"({crime} crime-related), with max severity {max_severity}. "
+            f"Primary issues: {categories_text}."
+        )
+
+    if incidents == 0:
+        return "Recommended because no nearby incidents were found in the last 7 days along this route."
+    return (
+        f"Recommended because it has lower corridor risk with {incidents} nearby incidents "
+        f"({crime} crime-related) and max severity {max_severity}. "
+        f"Primary issues: {categories_text}."
+    )
+
+
 def recommend_routes_with_llm(
     db: Session,
     *,
@@ -324,6 +358,7 @@ def recommend_routes_with_llm(
                 "max_severity": max_severity,
                 "avg_severity": round(avg_severity, 2),
                 "risk_score": risk_score,
+                "top_categories": _top_categories(route_incidents),
                 "incidents": route_incidents[:80],
             }
         )
@@ -358,8 +393,8 @@ def recommend_routes_with_llm(
             recommended_idx = int(ranked_safe[1]["index"])
 
         generated_by = "rules"
-        avoid_reason = "Highest route risk score from last 7 days incidents between start and end."
-        recommended_reason = "Lowest route risk score with fewer/less severe incidents in last 7 days."
+        avoid_reason = _reason_from_summary(route_summaries[avoid_idx], avoid=True)
+        recommended_reason = _reason_from_summary(route_summaries[recommended_idx], avoid=False)
 
     def pack(route_idx: int, reason: str) -> dict[str, Any]:
         route = routes[route_idx]
