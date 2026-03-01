@@ -363,6 +363,41 @@ def recommend_routes_with_llm(
             }
         )
 
+    if len(route_summaries) == 1:
+        only_summary = route_summaries[0]
+
+        def pack_single(route_idx: int, reason: str) -> dict[str, Any]:
+            route = routes[route_idx]
+            summary = route_summaries[route_idx]
+            return {
+                "index": route_idx,
+                "name": route.name,
+                "distance_m": route.distance_m,
+                "duration_s": route.duration_s,
+                "reason": reason,
+                "incident_summary": {
+                    "window_days": 7,
+                    "incident_count": summary["incident_count"],
+                    "crime_related_count": summary["crime_related_count"],
+                    "max_severity": summary["max_severity"],
+                    "avg_severity": summary["avg_severity"],
+                    "risk_score": summary["risk_score"],
+                },
+                "polyline": route.polyline,
+            }
+
+        if int(only_summary.get("incident_count", 0) or 0) == 0:
+            single_reason = "Only one route was available, and no nearby incidents were found in the last 7 days."
+        else:
+            single_reason = _reason_from_summary(only_summary, avoid=False)
+
+        return {
+            "avoid_route": None,
+            "recommended_route": pack_single(0, single_reason),
+            "window_days": 7,
+            "generated_by": "rules",
+        }
+
     llm_choice = choose_routes_with_llm(
         start={"lat": start_lat, "lon": start_lon},
         end={"lat": end_lat, "lon": end_lon},

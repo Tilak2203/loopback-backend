@@ -66,7 +66,7 @@ class LLMRouteRecommendRequest(BaseModel):
 
 
 class LLMRouteRecommendResponse(BaseModel):
-    avoid_route: Dict[str, Any]
+    avoid_route: Optional[Dict[str, Any]] = None
     recommended_route: Dict[str, Any]
     window_days: int
     generated_by: str
