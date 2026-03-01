@@ -201,7 +201,7 @@ def recommend_routes(
         max_routes=settings.MAX_MAPBOX_ROUTES,
     )
     if not routes:
-        raise ValueError("No routes returned by Mapbox")
+        raise ValueError("No routes returned by routing provider")
 
     # For MVP: pull up to 500 tasks (enough for hackathon demo). This powers the flags.
     tasks = db.query(Task).filter(Task.final_severity_1to5 >= 1).order_by(Task.final_severity_1to5.desc()).limit(500).all()
@@ -265,7 +265,7 @@ def recommend_routes_with_llm(
         max_routes=settings.MAX_MAPBOX_ROUTES,
     )
     if not routes:
-        raise ValueError("No routes returned by Mapbox")
+        raise ValueError("No routes returned by routing provider")
 
     since_dt = datetime.utcnow() - timedelta(days=7)
 
