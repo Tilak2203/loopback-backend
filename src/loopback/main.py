@@ -163,6 +163,7 @@ def create_app() -> FastAPI:
             return LLMRouteRecommendResponse(
                 avoid_route=rec["avoid_route"],
                 recommended_route=rec["recommended_route"],
+                tomorrow_plan=rec["tomorrow_plan"],
                 window_days=rec["window_days"],
                 generated_by=rec["generated_by"],
             )

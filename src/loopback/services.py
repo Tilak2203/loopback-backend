@@ -6,7 +6,7 @@ from sqlalchemy import func
 from loopback.config import settings
 from loopback.geo import to_geohash, haversine_m
 from loopback.maps import get_mapbox_routes
-from loopback.llm import triage_with_llm, choose_routes_with_llm
+from loopback.llm import triage_with_llm, choose_routes_with_llm, generate_tomorrow_plan_with_llm
 from loopback.models import Task, Report
 
 
@@ -281,6 +281,60 @@ def _reason_from_summary(summary: dict[str, Any], *, avoid: bool) -> str:
     )
 
 
+def _build_tomorrow_plan_fallback(
+    *,
+    recommended_route: dict[str, Any],
+    avoid_route: dict[str, Any] | None,
+) -> dict[str, Any]:
+    rec_summary = recommended_route.get("incident_summary", {})
+    avoid_summary = (avoid_route or {}).get("incident_summary", {})
+
+    rec_risk = float(rec_summary.get("risk_score", 0) or 0)
+    avoid_risk = float(avoid_summary.get("risk_score", rec_risk) or rec_risk)
+    incident_count = int(rec_summary.get("incident_count", 0) or 0)
+
+    gap = max(0.0, avoid_risk - rec_risk)
+    score = int(round(88 - rec_risk * 2.5 + gap * 1.5))
+    score = max(35, min(96, score))
+
+    if score >= 80:
+        outlook = "Strong"
+    elif score >= 65:
+        outlook = "Stable"
+    else:
+        outlook = "Use caution"
+
+    rec_name = str(recommended_route.get("name", "recommended route"))
+    do_title = f"Take {rec_name} tomorrow"
+    do_detail = (
+        f"This route shows lower recent corridor risk (score {rec_risk:.2f}) over the last 7 days. "
+        f"Plan for it as your primary commute option."
+    )
+
+    if avoid_route is None:
+        avoid_title = "No alternate high-risk route found"
+        avoid_detail = "Only one route was available. Leave a little earlier and monitor conditions before departure."
+    else:
+        avoid_name = str(avoid_route.get("name", "higher-risk route"))
+        avoid_title = f"Avoid {avoid_name} when possible"
+        avoid_detail = (
+            f"This route has higher recent risk (score {avoid_risk:.2f}) compared with your recommended route. "
+            f"Use it only if needed."
+        )
+
+    reason = (
+        f"Wellbeing score reflects recommended-route risk ({rec_risk:.2f}), risk gap ({gap:.2f}), "
+        f"and recent incident count ({incident_count}) near your path."
+    )
+
+    return {
+        "do_this": {"title": do_title, "detail": do_detail},
+        "avoid_this": {"title": avoid_title, "detail": avoid_detail},
+        "wellbeing": {"score_1to100": score, "outlook": outlook, "reason": reason},
+        "generated_by": "rules",
+    }
+
+
 def recommend_routes_with_llm(
     db: Session,
     *,
@@ -391,9 +445,25 @@ def recommend_routes_with_llm(
         else:
             single_reason = _reason_from_summary(only_summary, avoid=False)
 
+        single_recommended_route = pack_single(0, single_reason)
+        single_tomorrow_plan = generate_tomorrow_plan_with_llm(
+            mode=mode,
+            window_days=7,
+            recommended_route=single_recommended_route,
+            avoid_route=None,
+        )
+        if single_tomorrow_plan is None:
+            single_tomorrow_plan = _build_tomorrow_plan_fallback(
+                recommended_route=single_recommended_route,
+                avoid_route=None,
+            )
+        else:
+            single_tomorrow_plan["generated_by"] = "llm"
+
         return {
             "avoid_route": None,
-            "recommended_route": pack_single(0, single_reason),
+            "recommended_route": single_recommended_route,
+            "tomorrow_plan": single_tomorrow_plan,
             "window_days": 7,
             "generated_by": "rules",
         }
@@ -451,9 +521,27 @@ def recommend_routes_with_llm(
             "polyline": route.polyline,
         }
 
+    avoid_route_payload = pack(avoid_idx, avoid_reason)
+    recommended_route_payload = pack(recommended_idx, recommended_reason)
+
+    tomorrow_plan = generate_tomorrow_plan_with_llm(
+        mode=mode,
+        window_days=7,
+        recommended_route=recommended_route_payload,
+        avoid_route=avoid_route_payload,
+    )
+    if tomorrow_plan is None:
+        tomorrow_plan = _build_tomorrow_plan_fallback(
+            recommended_route=recommended_route_payload,
+            avoid_route=avoid_route_payload,
+        )
+    else:
+        tomorrow_plan["generated_by"] = "llm"
+
     return {
-        "avoid_route": pack(avoid_idx, avoid_reason),
-        "recommended_route": pack(recommended_idx, recommended_reason),
+        "avoid_route": avoid_route_payload,
+        "recommended_route": recommended_route_payload,
+        "tomorrow_plan": tomorrow_plan,
         "window_days": 7,
         "generated_by": generated_by,
     }

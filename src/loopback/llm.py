@@ -309,3 +309,76 @@ def choose_routes_with_llm(
         "recommended_reason": str(data.get("recommended_reason", "Lower incident risk with safer profile.")).strip()[:500],
         "notes": str(data.get("notes", "")).strip()[:500],
     }
+
+
+_TOMORROW_PLAN_PROMPT = """You are a commute wellbeing planner.
+Return STRICT JSON only (no extra text).
+
+Task:
+Given recommended/avoid route safety summaries for tomorrow, produce:
+1) one concrete "Do this" action,
+2) one concrete "Avoid this" action,
+3) a tomorrow wellbeing score (1-100) and short outlook.
+
+Rules:
+- Keep titles short and actionable.
+- Keep details practical and specific to provided risk data.
+- Do not invent facts not present in input.
+
+Output JSON schema:
+{
+  "do_this": {"title": "string", "detail": "string"},
+  "avoid_this": {"title": "string", "detail": "string"},
+  "wellbeing": {"score_1to100": 72, "outlook": "string", "reason": "string"}
+}
+"""
+
+
+def generate_tomorrow_plan_with_llm(
+    *,
+    mode: str,
+    window_days: int,
+    recommended_route: dict[str, Any],
+    avoid_route: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if not getattr(settings, "GEMINI_API_KEY", ""):
+        return None
+
+    payload = {
+        "mode": mode,
+        "window_days": window_days,
+        "recommended_route": recommended_route,
+        "avoid_route": avoid_route,
+    }
+
+    try:
+        text = _gemini_generate_text(_TOMORROW_PLAN_PROMPT, json.dumps(payload, ensure_ascii=False))
+        data = _extract_json(text)
+    except Exception:
+        return None
+
+    do_this = data.get("do_this") if isinstance(data.get("do_this"), dict) else {}
+    avoid_this = data.get("avoid_this") if isinstance(data.get("avoid_this"), dict) else {}
+    wellbeing = data.get("wellbeing") if isinstance(data.get("wellbeing"), dict) else {}
+
+    try:
+        score = int(wellbeing.get("score_1to100", 70))
+    except Exception:
+        score = 70
+    score = max(1, min(100, score))
+
+    return {
+        "do_this": {
+            "title": str(do_this.get("title", "Take the recommended route tomorrow")).strip()[:120],
+            "detail": str(do_this.get("detail", "Use the recommended route for lower incident exposure.")).strip()[:400],
+        },
+        "avoid_this": {
+            "title": str(avoid_this.get("title", "Avoid higher-risk route options")).strip()[:120],
+            "detail": str(avoid_this.get("detail", "Skip routes with higher recent incident severity and density.")).strip()[:400],
+        },
+        "wellbeing": {
+            "score_1to100": score,
+            "outlook": str(wellbeing.get("outlook", "Moderately positive")).strip()[:120],
+            "reason": str(wellbeing.get("reason", "Based on recent route incident profile and safer alternative availability.")).strip()[:400],
+        },
+    }

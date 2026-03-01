@@ -65,9 +65,28 @@ class LLMRouteRecommendRequest(BaseModel):
     mode: str = Field(default="walk")
 
 
+class TomorrowPlanCard(BaseModel):
+    title: str
+    detail: str
+
+
+class TomorrowWellbeing(BaseModel):
+    score_1to100: int
+    outlook: str
+    reason: str
+
+
+class TomorrowPlan(BaseModel):
+    do_this: TomorrowPlanCard
+    avoid_this: TomorrowPlanCard
+    wellbeing: TomorrowWellbeing
+    generated_by: str
+
+
 class LLMRouteRecommendResponse(BaseModel):
     avoid_route: Optional[Dict[str, Any]] = None
     recommended_route: Dict[str, Any]
+    tomorrow_plan: TomorrowPlan
     window_days: int
     generated_by: str
 
