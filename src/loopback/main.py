@@ -3,9 +3,11 @@ import logging
 from uuid import UUID
 
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from loopback.config import settings
 from loopback.db import Base, engine, get_db
 from loopback.models import (
     Department, Task, Report, User, DeptWorker, AssignedTask, UserAction
@@ -66,6 +68,14 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="LoopBack API", version="0.1.0", lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     def health():

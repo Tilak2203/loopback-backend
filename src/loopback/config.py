@@ -14,9 +14,14 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = Field(default="")
     GEMINI_MODEL: str = Field(default="gemini-2.5-flash")
+    CORS_ORIGINS: str = Field(default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
 
     GEOHASH_PRECISION: int = Field(default=7)
     ISSUE_NEAR_ROUTE_METERS: int = Field(default=80)
     MAX_LLM_SEVERITY_ADJUST: int = Field(default=1)
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
 settings = Settings()
